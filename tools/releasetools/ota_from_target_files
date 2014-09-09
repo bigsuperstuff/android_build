@@ -71,6 +71,9 @@ Usage:  ota_from_target_files [flags] input_target_files output_ota_package
   --extras_file <file>
       Extras file
 
+  --trash_file <file>
+	  Trash file
+  
   --no_separate_recovery <boolean>
       Do not generate recovery image. For devices which do not have a truly
       separate recovery partition.
@@ -116,6 +119,7 @@ OPTIONS.backuptool = False
 OPTIONS.override_device = 'auto'
 OPTIONS.override_prop = False
 OPTIONS.extras_file = 'build/tools/releasetools/extras.txt'
+OPTIONS.trash_file = 'build/tools/releasetools/trash.txt'
 OPTIONS.no_separate_recovery = False
 
 def MostPopularKey(d, default):
@@ -335,6 +339,7 @@ def CopySystemFiles(input_zip, output_zip=None,
 
   symlinks = []
   extras_list = [line.strip() for line in open(OPTIONS.extras_file)]
+  trash_list = [line.strip() for line in open(OPTIONS.trash_file)]
 
   for info in input_zip.infolist():
     if info.filename.startswith("SYSTEM/"):
@@ -347,7 +352,7 @@ def CopySystemFiles(input_zip, output_zip=None,
         if basefilename in extras_list:
           fn = info2.filename = "extras/" + basefilename
         else:
-          fn = info2.filename = "system/" + basefilename
+		  fn = info2.filename = "system/" + basefilename
         if substitute and fn in substitute and substitute[fn] is None:
           continue
         if output_zip is not None:
@@ -355,7 +360,8 @@ def CopySystemFiles(input_zip, output_zip=None,
             data = substitute[fn]
           else:
             data = input_zip.read(info.filename)
-          output_zip.writestr(info2, data)
+            if basefilename not in trash_list:
+              output_zip.writestr(info2, data)
         if fn.endswith("/"):
           Item.Get(fn[:-1], dir=True)
         else:
@@ -519,6 +525,10 @@ else if get_stage("%(bcb_dev)s", "stage") == "3/3" then
 
   device_specific.FullOTA_InstallBegin()
 
+  script.Mount("/data")
+  script.ValidateSignatures("data")
+  script.Unmount("/data")
+
   if OPTIONS.backuptool:
     script.Mount("/system")
     script.RunBackup("backup")
@@ -529,14 +539,10 @@ else if get_stage("%(bcb_dev)s", "stage") == "3/3" then
   if OPTIONS.wipe_user_data:
     script.FormatPartition("/data")
 
-  script.Mount("/data")
-  script.ValidateSignatures("data")
-  script.Unmount("/data")
-
   if "selinux_fc" in OPTIONS.info_dict:
     WritePolicyConfig(OPTIONS.info_dict["selinux_fc"], output_zip)
 
-  script.FormatPartition("/system")
+#  script.FormatPartition("/system")
   script.Mount("/system")
   if not OPTIONS.no_separate_recovery:
     script.UnpackPackageDir("recovery", "/system")
@@ -608,13 +614,17 @@ def LoadSystemFiles(z):
   ZipFile, and return a dict of {filename: File object}."""
   out = {}
   extras_list = [line.strip() for line in open(OPTIONS.extras_file)]
+  trash_list = [line.strip() for line in open(OPTIONS.trash_file)]
   for info in z.infolist():
     if info.filename.startswith("SYSTEM/") and not IsSymlink(info):
       basefilename = info.filename[7:]
       if basefilename in extras_list:
         fn = "extras/" + basefilename
       else:
-        fn = "system/" + basefilename
+		if basefilename not in trash_list:
+		  fn = "system/" + basefilename
+		else:
+		  fn = "trash/" + basefilename
       data = z.read(info.filename)
       out[fn] = common.File(fn, data)
   return out
@@ -737,14 +747,13 @@ def WriteIncrementalOTAPackage(target_zip, source_zip, output_zip):
       patch_list.append((tf, sf, tf.size, common.sha1(d).hexdigest()))
       largest_source_size = max(largest_source_size, sf.size)
 
-  script.Mount("/system")
-
   if not OPTIONS.override_prop:
     source_fp = GetBuildProp("ro.build.fingerprint", OPTIONS.source_info_dict)
     target_fp = GetBuildProp("ro.build.fingerprint", OPTIONS.target_info_dict)
     metadata["pre-build"] = source_fp
     metadata["post-build"] = target_fp
 
+    script.Mount("/system")
     script.AssertSomeFingerprint(source_fp, target_fp)
 
   source_boot = common.GetBootableImage(
@@ -1052,6 +1061,8 @@ def main(argv):
       OPTIONS.override_prop = bool(a.lower() == 'true')
     elif o in ("--extras_file"):
       OPTIONS.extras_file = str(a)
+    elif o in ("--trash_file"):
+      OPTIONS.trash_file = str(a)
     elif o in ("--no_separate_recovery"):
       OPTIONS.no_separate_recovery = bool(a.lower() == 'true')
     else:
@@ -1073,6 +1084,7 @@ def main(argv):
                                               "override_device=",
                                               "override_prop=",
                                               "extras_file=",
+                                              "trash_file=",
                                               "no_separate_recovery=",
                                               ],
                              extra_option_handler=option_handler)
